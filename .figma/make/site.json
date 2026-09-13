@@ -1,0 +1,11 @@
+{
+  "title": "Lucky Draw",
+  "description": "Conduct multi-round lucky draws with clear results display by name, department, and prizes, ensuring unique winners across two distinct draws.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
