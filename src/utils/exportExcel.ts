@@ -36,7 +36,7 @@ export function exportGenesisLuckyDrawToExcel(
   const data = records.map((r, idx) => ({
     'STT': idx + 1,
     'Hạng Giải': r.prizeLabel,
-    'Sản Phẩm Trúng Thưởng': `${r.productName} - ${r.productDetail}`,
+    'Sản Phẩm Trúng Thưởng': r.productDetail ? `${r.productName} - ${r.productDetail}` : r.productName,
     'Họ Và Tên': r.winner.name,
     'Mã Khách': r.winner.code,
     'Phòng Ban': r.winner.department,
