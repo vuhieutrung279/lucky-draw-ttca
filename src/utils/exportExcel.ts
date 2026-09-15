@@ -33,14 +33,21 @@ export function exportGenesisLuckyDrawToExcel(
   records: WonRecord[],
   fileName = 'Ket_Qua_Tong_Ket_Lucky_Draw_Genesis.xlsx'
 ) {
-  const data = records.map((r, idx) => ({
-    'STT': idx + 1,
-    'Hạng Giải': r.prizeLabel,
-    'Sản Phẩm Trúng Thưởng': r.productDetail ? `${r.productName} - ${r.productDetail}` : r.productName,
-    'Họ Và Tên': r.winner.name,
-    'Mã Khách': r.winner.code,
-    'Phòng Ban': r.winner.department,
-  }));
+  const hasDepartment = records.some(r => Boolean(r.winner.department));
+
+  const data = records.map((r, idx) => {
+    const item: Record<string, any> = {
+      'STT': idx + 1,
+      'Hạng Giải': r.prizeLabel,
+      'Sản Phẩm Trúng Thưởng': r.productDetail ? `${r.productName} - ${r.productDetail}` : r.productName,
+      'Họ Và Tên': r.winner.name,
+      'Mã Khách': r.winner.code,
+    };
+    if (hasDepartment) {
+      item['Phòng Ban'] = r.winner.department || '';
+    }
+    return item;
+  });
 
   const worksheet = XLSX.utils.json_to_sheet(data);
 
@@ -50,7 +57,7 @@ export function exportGenesisLuckyDrawToExcel(
     { wch: 45 },
     { wch: 30 },
     { wch: 18 },
-    { wch: 24 },
+    ...(hasDepartment ? [{ wch: 24 }] : []),
   ];
 
   const workbook = XLSX.utils.book_new();

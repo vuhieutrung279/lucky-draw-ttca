@@ -11,9 +11,12 @@ export type SyncAction =
   | { type: 'SET_DRAW_READY'; isDrawReady: boolean }
   | {
       type: 'START_SPIN';
+      timestamp: number;
+    }
+  | {
+      type: 'STOP_SPIN';
       winningParticipant: Participant;
       timestamp: number;
-      duration: number;
     }
   | { type: 'CONFIRM_WINNER'; winnersHistory: WonRecord[] }
   | { type: 'REDRAW'; timestamp: number }

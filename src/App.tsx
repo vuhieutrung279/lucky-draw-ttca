@@ -64,31 +64,46 @@ export default function App() {
     }
   }, []);
 
+  const stateRef = useRef({ page, selectedPrizeKey, winnersHistory });
+  useEffect(() => {
+    stateRef.current = { page, selectedPrizeKey, winnersHistory };
+  }, [page, selectedPrizeKey, winnersHistory]);
+
   // Listen to remote actions from Master Screen
   useEffect(() => {
     const unsubscribe = syncManager.subscribe((action) => {
       if (action.type === 'NAVIGATE') {
-        setPage(action.page);
+        setPage(prev => (prev !== action.page ? action.page : prev));
         setTransitionKey(k => k + 1);
       } else if (action.type === 'SELECT_PRIZE') {
-        setSelectedPrizeKey(action.prizeKey);
+        setSelectedPrizeKey(prev => (prev !== action.prizeKey ? action.prizeKey : prev));
       } else if (action.type === 'REQUEST_SYNC') {
         // If master receives REQUEST_SYNC, reply with full current state
         if (syncManager.isMaster()) {
           syncManager.broadcast({
             type: 'FULL_STATE_SYNC',
-            page,
-            selectedPrizeKey,
+            page: stateRef.current.page,
+            selectedPrizeKey: stateRef.current.selectedPrizeKey,
             isDrawReady: true,
-            winnersHistory,
+            winnersHistory: stateRef.current.winnersHistory,
           });
         }
       } else if (action.type === 'FULL_STATE_SYNC') {
-        setPage(action.page);
-        setSelectedPrizeKey(action.selectedPrizeKey);
-        setWinnersHistory(action.winnersHistory);
+        setPage(prev => (prev !== action.page ? action.page : prev));
+        setSelectedPrizeKey(prev => (prev !== action.selectedPrizeKey ? action.selectedPrizeKey : prev));
+        setWinnersHistory(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(action.winnersHistory)) {
+            return prev;
+          }
+          return action.winnersHistory;
+        });
       } else if (action.type === 'CONFIRM_WINNER') {
-        setWinnersHistory(action.winnersHistory);
+        setWinnersHistory(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(action.winnersHistory)) {
+            return prev;
+          }
+          return action.winnersHistory;
+        });
       }
     });
 
@@ -101,7 +116,7 @@ export default function App() {
     }
 
     return unsubscribe;
-  }, [page, selectedPrizeKey, winnersHistory]);
+  }, []);
 
   // Mode cycle helper
   const cycleScreenMode = useCallback(() => {

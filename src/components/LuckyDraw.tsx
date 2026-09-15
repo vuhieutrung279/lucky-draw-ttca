@@ -163,6 +163,7 @@ export default function LuckyDraw({
 
   const spinIntervalRef = useRef<number | null>(null);
   const spinTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentPoolRef = useRef<Participant[]>([]);
 
   const currentPrizeConfig = PRIZE_CONFIGS.find(p => p.key === selectedPrizeKey) || PRIZE_CONFIGS[0];
 
@@ -228,54 +229,36 @@ export default function LuckyDraw({
     setPhase('ready');
   }, [pendingWinner, commitPendingWinner]);
 
-  const executeSpin = useCallback((pool: Participant[], preselectedWinner?: Participant, duration = 4200) => {
+  const executeSpin = useCallback((pool: Participant[]) => {
     if (pool.length === 0) return;
 
     if (spinIntervalRef.current) cancelAnimationFrame(spinIntervalRef.current);
     if (spinTimeoutRef.current) clearTimeout(spinTimeoutRef.current);
 
+    currentPoolRef.current = pool;
     setPhase('spinning');
 
     const poolSize = pool.length;
-    const TOTAL_DURATION = duration;
-    const startTime = performance.now();
     let lastTime = 0;
     let lastIdx = -1;
 
-    // Pick final winning participant (or use synced winner)
-    const winningParticipant = preselectedWinner || pool[Math.floor(Math.random() * poolSize)];
-
     // Broadcast to slaves if master initiated spin
-    if (!preselectedWinner && syncManager.isMaster()) {
+    if (syncManager.isMaster()) {
       syncManager.broadcast({
         type: 'START_SPIN',
-        winningParticipant,
         timestamp: Date.now(),
-        duration: TOTAL_DURATION,
       });
     }
 
     const spinStep = (time: number) => {
-      const elapsed = time - startTime;
-      const progress = Math.min(elapsed / TOTAL_DURATION, 1);
-
-      // Fast continuous rolling (~40ms) throughout the entire spin for a dynamic blur effect
+      // Fast continuous rolling (~40ms) throughout the entire spin for dynamic blur effect
       const currentInterval = 40;
 
       if (!lastTime || time - lastTime >= currentInterval) {
         lastTime = time;
 
-        if (progress >= 1) {
-          if (spinIntervalRef.current) cancelAnimationFrame(spinIntervalRef.current);
-          setPendingWinner(winningParticipant);
-          setCurrentRollingWinner(winningParticipant);
-          setPhase('drawn');
-          setFireworkKey(k => k + 1);
-          return;
-        }
-
         let randIdx = Math.floor(Math.random() * poolSize);
-        if (randIdx === lastIdx) randIdx = (randIdx + 1) % poolSize;
+        if (randIdx === lastIdx && poolSize > 1) randIdx = (randIdx + 1) % poolSize;
         lastIdx = randIdx;
         setCurrentRollingWinner(pool[randIdx]);
       }
@@ -285,6 +268,44 @@ export default function LuckyDraw({
 
     spinIntervalRef.current = requestAnimationFrame(spinStep);
   }, []);
+
+  const stopSpin = useCallback((preselectedWinner?: Participant) => {
+    if (spinIntervalRef.current) {
+      cancelAnimationFrame(spinIntervalRef.current);
+      spinIntervalRef.current = null;
+    }
+    if (spinTimeoutRef.current) {
+      clearTimeout(spinTimeoutRef.current);
+      spinTimeoutRef.current = null;
+    }
+
+    const pool = currentPoolRef.current.length > 0
+      ? currentPoolRef.current
+      : (() => {
+          const activeWonIds = new Set(allWinnersHistory.map(w => w.winner.id));
+          return PARTICIPANTS.filter(p => !activeWonIds.has(p.id));
+        })();
+
+    if (pool.length === 0) {
+      setPhase('ready');
+      return;
+    }
+
+    const winningParticipant = preselectedWinner || pool[Math.floor(Math.random() * pool.length)];
+
+    setPendingWinner(winningParticipant);
+    setCurrentRollingWinner(winningParticipant);
+    setPhase('drawn');
+    setFireworkKey(k => k + 1);
+
+    if (!preselectedWinner && syncManager.isMaster()) {
+      syncManager.broadcast({
+        type: 'STOP_SPIN',
+        winningParticipant,
+        timestamp: Date.now(),
+      });
+    }
+  }, [allWinnersHistory]);
 
   const startSpin = useCallback(() => {
     if (phase === 'spinning') return;
@@ -331,14 +352,31 @@ export default function LuckyDraw({
     }
   }, []);
 
+  const allWinnersHistoryRef = useRef(allWinnersHistory);
+  useEffect(() => {
+    allWinnersHistoryRef.current = allWinnersHistory;
+  }, [allWinnersHistory]);
+
+  const executeSpinRef = useRef(executeSpin);
+  useEffect(() => {
+    executeSpinRef.current = executeSpin;
+  }, [executeSpin]);
+
+  const stopSpinRef = useRef(stopSpin);
+  useEffect(() => {
+    stopSpinRef.current = stopSpin;
+  }, [stopSpin]);
+
   // Listen for sync events from Master
   useEffect(() => {
     const unsubscribe = syncManager.subscribe((action) => {
       if (action.type === 'START_SPIN') {
-        const activeWonIds = new Set(allWinnersHistory.map(w => w.winner.id));
+        const activeWonIds = new Set(allWinnersHistoryRef.current.map(w => w.winner.id));
         const pool = PARTICIPANTS.filter(p => !activeWonIds.has(p.id));
-        setIsDrawReady(true);
-        executeSpin(pool, action.winningParticipant, action.duration);
+        setIsDrawReady(prev => (!prev ? true : prev));
+        executeSpinRef.current(pool);
+      } else if (action.type === 'STOP_SPIN') {
+        stopSpinRef.current(action.winningParticipant);
       } else if (action.type === 'CONFIRM_WINNER') {
         if (spinIntervalRef.current) cancelAnimationFrame(spinIntervalRef.current);
         if (spinTimeoutRef.current) clearTimeout(spinTimeoutRef.current);
@@ -369,7 +407,7 @@ export default function LuckyDraw({
     });
 
     return unsubscribe;
-  }, [allWinnersHistory, executeSpin]);
+  }, []);
 
   const switchPrizeTier = useCallback((nextTierKey: PrizeKey) => {
     if (phase === 'spinning') return;
@@ -463,7 +501,7 @@ export default function LuckyDraw({
   useEffect(() => {
     const tierWins = allWinnersHistory.filter(w => w.prizeKey === selectedPrizeKey).length;
     if (tierWins > 0) {
-      setIsDrawReady(true);
+      setIsDrawReady(prev => (!prev ? true : prev));
     }
   }, [selectedPrizeKey, allWinnersHistory]);
 
@@ -501,6 +539,10 @@ export default function LuckyDraw({
         }
         if (!isDrawReady) {
           handleSetDrawReady(true);
+          return;
+        }
+        if (phase === 'spinning') {
+          stopSpin();
           return;
         }
         if (phase === 'drawn') {
@@ -546,7 +588,7 @@ export default function LuckyDraw({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [phase, isTierCompleted, isCurrentTierFullyDrawn, isDrawReady, pendingWinner, currentPrizeConfig, currentTierWinners.length, allWinnersHistory, startSpin, confirmWinner, redrawCurrent, goToNextPrizeOrSummary, handleBack, switchPrizeTier, commitPendingWinner, onGoToSummary, handleSetDrawReady]);
+  }, [phase, isTierCompleted, isCurrentTierFullyDrawn, isDrawReady, pendingWinner, currentPrizeConfig, currentTierWinners.length, allWinnersHistory, startSpin, stopSpin, confirmWinner, redrawCurrent, goToNextPrizeOrSummary, handleBack, switchPrizeTier, commitPendingWinner, onGoToSummary, handleSetDrawReady]);
 
   const displayWinner = phase === 'spinning' ? currentRollingWinner : (phase === 'drawn' ? pendingWinner : null);
 
@@ -825,7 +867,7 @@ export default function LuckyDraw({
                     background: 'linear-gradient(180deg, #ffeed6 25%, #edd199 65%, #dabd81 80%)',
                     WebkitBackgroundClip: 'text',
                     WebkitTextFillColor: 'transparent',
-                    marginBottom: '1.497395vw',
+                    marginBottom: currentPrizeConfig.productDetail ? '0.6vw' : '1.497395vw',
                     whiteSpace: 'nowrap',
                   }}
                 >
@@ -837,7 +879,7 @@ export default function LuckyDraw({
                   </span>
                 </h2>
 
-                {/* Tên quà: color #fff, size 70px (adjusted for consolation), margin bottom 50px */}
+                {/* Tên quà: color #fff, size 70px (adjusted for consolation) */}
                 <p
                   style={{
                     fontFamily: "'SF Pro Display', sans-serif",
@@ -846,12 +888,30 @@ export default function LuckyDraw({
                     color: '#ffffff',
                     letterSpacing: '0.02em',
                     lineHeight: 1.15,
-                    marginBottom: '1.627604vw',
+                    marginBottom: currentPrizeConfig.productDetail ? '0.3vw' : '1.627604vw',
                     whiteSpace: 'nowrap',
                   }}
                 >
                   {currentPrizeConfig.productName}
                 </p>
+
+                {/* Subtitle / Chi tiết sản phẩm */}
+                {currentPrizeConfig.productDetail && (
+                  <p
+                    style={{
+                      fontFamily: "'SF Pro Display', sans-serif",
+                      fontSize: '1.236979vw', // 38px / 3072 * 100vw
+                      fontWeight: 300, // SF Pro Display Light
+                      color: 'rgba(255, 255, 255, 0.85)',
+                      letterSpacing: '0.02em',
+                      lineHeight: 1.15,
+                      marginBottom: '1.0vw',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {currentPrizeConfig.productDetail}
+                  </p>
+                )}
               </div>
 
               {/* Tên người trúng giải: box 970x120, border 1px f5cf81, background 04162d, border-radius 35px, padding y 30px, margin bottom 65px */}
@@ -1189,27 +1249,29 @@ export default function LuckyDraw({
                 className="w-full flex items-center justify-center z-20"
                 style={{ minHeight: '3.125vw', marginTop: '0.2vw' }}
               >
-                {/* Case 1: Active Spinning Indicator */}
+                {/* Case 1: Active Spinning Indicator & Stop Action */}
                 {phase === 'spinning' && (
-                  <div
-                    className="flex items-center justify-center rounded-full animate-pulse select-none"
+                  <button
+                    type="button"
+                    onClick={() => stopSpin()}
+                    className="cursor-pointer group flex items-center justify-center rounded-full transition-all duration-300 hover:scale-105 active:scale-95 animate-pulse select-none"
                     style={{
                       height: '2.86vw',
                       padding: '0 2.2vw',
                       gap: '0.6vw',
-                      background: 'rgba(212, 160, 23, 0.22)',
-                      border: '0.08vw solid #f4cb66',
+                      background: 'linear-gradient(135deg, rgba(212, 160, 23, 0.35) 0%, rgba(244, 203, 102, 0.2) 100%)',
+                      border: '0.1vw solid #f4cb66',
                       color: '#f4cb66',
                       fontFamily: "'SF Pro Display', sans-serif",
                       fontSize: '0.92vw',
-                      letterSpacing: '0.14em',
+                      letterSpacing: '0.12em',
                       fontWeight: 700,
-                      boxShadow: '0 0 1.2vw rgba(244,203,102,0.4)',
+                      boxShadow: '0 0 1.5vw rgba(244,203,102,0.45)',
                     }}
                   >
                     <span className="inline-block animate-spin text-[1.1vw]">⚙</span>
                     <span>ĐANG QUAY...</span>
-                  </div>
+                  </button>
                 )}
 
                 {/* Case 2: Drawn Winner - Action Button to Pin / Confirm Winner */}
