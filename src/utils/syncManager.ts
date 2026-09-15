@@ -246,6 +246,14 @@ class SyncManager {
 
         if (!isMaster) {
           this.connectToMaster(masterPeerId);
+        } else {
+          // Master opened: broadcast presence and sync trigger
+          this.handleIncomingMessage({
+            id: `internal-master-open-${Date.now()}`,
+            senderScreen: 'left',
+            timestamp: Date.now(),
+            action: { type: 'REQUEST_SYNC', timestamp: Date.now() },
+          });
         }
       });
 
@@ -254,6 +262,17 @@ class SyncManager {
         this.peer.on('connection', (conn) => {
           console.log('[WebRTC Sync] Slave connected to Master:', conn.peer);
           this.p2pConnections.add(conn);
+
+          conn.on('open', () => {
+            console.log('[WebRTC Sync] Connection opened with slave:', conn.peer);
+            // Immediately trigger master to send current full state to newly connected slave
+            this.handleIncomingMessage({
+              id: `internal-conn-open-${Date.now()}`,
+              senderScreen: 'right',
+              timestamp: Date.now(),
+              action: { type: 'REQUEST_SYNC', timestamp: Date.now() },
+            });
+          });
 
           conn.on('data', (data) => {
             this.handleIncomingMessage(data as SyncMessage);
@@ -276,10 +295,10 @@ class SyncManager {
 
         // If ID taken (e.g. master refreshed tab before timeout), fallback with suffix
         if (err?.type === 'unavailable-id' && isMaster) {
-          console.log('[WebRTC Sync] Master ID is currently held by previous session. Reconnecting in 3s...');
+          console.log('[WebRTC Sync] Master ID is currently held by previous session. Reconnecting in 2s...');
           this.p2pReconnectTimer = setTimeout(() => {
             this.initPeerJS();
-          }, 3000);
+          }, 2000);
         } else if (!isMaster) {
           // Retry slave connection
           this.scheduleReconnect(masterPeerId);
@@ -337,7 +356,7 @@ class SyncManager {
       if (!this.isMaster() && (!this.slaveToMasterConn || !this.slaveToMasterConn.open)) {
         this.connectToMaster(masterPeerId);
       }
-    }, 3000);
+    }, 1800);
   }
 }
 
