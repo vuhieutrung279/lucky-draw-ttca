@@ -30,65 +30,19 @@ export default function App() {
   });
 
   const [showGuide, setShowGuide] = useState(false);
-
-  // Initialize state from persistent storage so ANY screen opening first/after gets identical state
-  const [page, setPage] = useState<Page>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('__genesis_luckydraw_app_state__');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.page) return parsed.page;
-        }
-      } catch {}
-    }
-    return 'home';
-  });
-
-  const [selectedPrizeKey, setSelectedPrizeKey] = useState<PrizeKey>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('__genesis_luckydraw_app_state__');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.selectedPrizeKey) return parsed.selectedPrizeKey;
-        }
-      } catch {}
-    }
-    return 'consolation';
-  });
-
-  const [winnersHistory, setWinnersHistory] = useState<WonRecord[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('__genesis_luckydraw_app_state__');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed.winnersHistory)) return parsed.winnersHistory;
-        }
-      } catch {}
-    }
-    return [];
-  });
-
+  const [page, setPage] = useState<Page>('home');
+  const [selectedPrizeKey, setSelectedPrizeKey] = useState<PrizeKey>('consolation');
+  const [winnersHistory, setWinnersHistory] = useState<WonRecord[]>([]);
   const [transitionKey, setTransitionKey] = useState(0);
 
-  // Persist shared state to localStorage
+  // Clear any old stored state on load
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(
-          '__genesis_luckydraw_app_state__',
-          JSON.stringify({
-            page,
-            selectedPrizeKey,
-            winnersHistory,
-            updatedAt: Date.now(),
-          })
-        );
+        localStorage.removeItem('__genesis_luckydraw_app_state__');
       } catch {}
     }
-  }, [page, selectedPrizeKey, winnersHistory]);
+  }, []);
 
   // Sync screenMode to syncManager and localStorage
   useEffect(() => {
@@ -162,30 +116,6 @@ export default function App() {
       }
     });
 
-    // Cross-tab direct storage listener for instantaneous same-origin sync
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === '__genesis_luckydraw_app_state__' && e.newValue) {
-        try {
-          const parsed = JSON.parse(e.newValue);
-          if (parsed.page) {
-            setPage(prev => (prev !== parsed.page ? parsed.page : prev));
-          }
-          if (parsed.selectedPrizeKey) {
-            setSelectedPrizeKey(prev => (prev !== parsed.selectedPrizeKey ? parsed.selectedPrizeKey : prev));
-          }
-          if (Array.isArray(parsed.winnersHistory)) {
-            setWinnersHistory(prev => {
-              if (JSON.stringify(prev) === JSON.stringify(parsed.winnersHistory)) {
-                return prev;
-              }
-              return parsed.winnersHistory;
-            });
-          }
-        } catch {}
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-
     // Initial sync requests
     if (!syncManager.isMaster()) {
       syncManager.broadcast({
@@ -224,7 +154,6 @@ export default function App() {
 
     return () => {
       unsubscribe();
-      window.removeEventListener('storage', handleStorageChange);
       clearInterval(heartbeatInterval);
     };
   }, []);

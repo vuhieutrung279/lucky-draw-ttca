@@ -1,3 +1,4 @@
+import mqtt, { type MqttClient } from 'mqtt';
 import Peer, { type DataConnection } from 'peerjs';
 import type { PrizeKey, Participant } from '../data/participants';
 import type { WonRecord } from './exportExcel';
@@ -44,6 +45,10 @@ class SyncManager {
   private currentScreenMode: ScreenMode = 'left';
   private clientInstanceId: string = Math.random().toString(36).substring(2, 9);
 
+  // Cloud MQTT State (cross-laptop / different networks)
+  private mqttClient: MqttClient | null = null;
+  private mqttTopic: string = 'genesis/luckydraw/v1/live';
+
   // WebRTC PeerJS State
   private peer: Peer | null = null;
   private p2pConnections: Set<DataConnection> = new Set();
@@ -61,7 +66,12 @@ class SyncManager {
       }
     }
 
-    // 1. Initialize BroadcastChannel (for same machine / multi-window)
+    this.mqttTopic = `genesis/luckydraw/v1/${this.roomId}`;
+
+    // 1. Initialize Cloud MQTT over WebSockets (works across different laptops & networks anywhere)
+    this.initMqtt();
+
+    // 2. Initialize BroadcastChannel (for same machine / multi-window)
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       try {
         this.broadcastChannel = new BroadcastChannel('genesis_luckydraw_sync_channel');
@@ -73,7 +83,7 @@ class SyncManager {
       }
     }
 
-    // 2. Initialize localStorage storage listener (backup cross-tab)
+    // 3. Initialize localStorage storage listener (backup cross-tab)
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', (e) => {
         if (e.key === '__genesis_luckydraw_sync_evt__' && e.newValue) {
@@ -87,7 +97,7 @@ class SyncManager {
       });
     }
 
-    // 3. Initialize Vite Dev Server HMR WebSocket relay (for local dev LAN sync)
+    // 4. Initialize Vite Dev Server HMR WebSocket relay (for local dev LAN sync)
     if (typeof import.meta !== 'undefined' && (import.meta as any).hot) {
       const hot = (import.meta as any).hot;
       hot.on('luckydraw:sync-relay', (data: SyncMessage) => {
@@ -95,8 +105,66 @@ class SyncManager {
       });
     }
 
-    // 4. Initialize WebRTC P2P DataChannel via PeerJS
+    // 5. Initialize WebRTC P2P DataChannel via PeerJS (optional local P2P layer)
     this.initPeerJS();
+  }
+
+  private initMqtt() {
+    if (typeof window === 'undefined') return;
+
+    try {
+      // Connect to global, high-availability public WebSocket MQTT broker
+      const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+        clientId: `genesis_draw_${this.clientInstanceId}_${Math.random().toString(36).substring(2, 6)}`,
+        keepalive: 30,
+        clean: true,
+        reconnectPeriod: 2000,
+        connectTimeout: 5000,
+      });
+
+      this.mqttClient = client;
+
+      client.on('connect', () => {
+        console.log(`[Cloud Sync] Connected to Cloud MQTT Broker! Topic: ${this.mqttTopic}`);
+        client.subscribe(this.mqttTopic, { qos: 1 }, (err) => {
+          if (!err) {
+            console.log(`[Cloud Sync] Subscribed to ${this.mqttTopic}`);
+            if (!this.isMaster()) {
+              this.broadcast({
+                type: 'REQUEST_SYNC',
+                timestamp: Date.now(),
+              });
+            } else {
+              this.handleIncomingMessage({
+                id: `internal-master-mqtt-${Date.now()}`,
+                senderScreen: 'left',
+                timestamp: Date.now(),
+                action: { type: 'REQUEST_SYNC', timestamp: Date.now() },
+              });
+            }
+          }
+        });
+      });
+
+      client.on('message', (_topic, payload) => {
+        try {
+          const data: SyncMessage = JSON.parse(payload.toString());
+          this.handleIncomingMessage(data);
+        } catch {
+          // ignore parse errors
+        }
+      });
+
+      client.on('error', (err) => {
+        console.warn('[Cloud Sync] MQTT Error:', err);
+      });
+
+      client.on('close', () => {
+        console.log('[Cloud Sync] MQTT disconnected, reconnecting...');
+      });
+    } catch (err) {
+      console.warn('[Cloud Sync] Failed to initialize MQTT:', err);
+    }
   }
 
   public setScreenMode(mode: ScreenMode) {
@@ -140,7 +208,25 @@ class SyncManager {
       action,
     };
 
-    // 1. WebRTC P2P DataChannel Broadcast
+    // 1. Cloud MQTT over WebSockets (guaranteed cross-laptop, cross-network sync)
+    if (this.mqttClient && this.mqttClient.connected) {
+      try {
+        this.mqttClient.publish(this.mqttTopic, JSON.stringify(message), { qos: 1 });
+      } catch (err) {
+        console.warn('Error publishing to MQTT:', err);
+      }
+    }
+
+    // 2. BroadcastChannel
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage(message);
+      } catch (err) {
+        console.warn('Error posting to BroadcastChannel:', err);
+      }
+    }
+
+    // 3. WebRTC P2P DataChannel
     if (this.isMaster()) {
       for (const conn of this.p2pConnections) {
         if (conn.open) {
@@ -158,15 +244,6 @@ class SyncManager {
         } catch (err) {
           console.warn('Error sending P2P message to master:', err);
         }
-      }
-    }
-
-    // 2. BroadcastChannel
-    if (this.broadcastChannel) {
-      try {
-        this.broadcastChannel.postMessage(message);
-      } catch (err) {
-        console.warn('Error posting to BroadcastChannel:', err);
       }
     }
 
