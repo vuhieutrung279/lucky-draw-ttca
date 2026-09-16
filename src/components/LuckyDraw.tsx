@@ -84,12 +84,6 @@ function AutoTeletext({
         whiteSpace: 'nowrap',
         justifyContent: shouldAnimate ? 'flex-start' : 'center',
         textAlign: shouldAnimate ? 'left' : 'center',
-        maskImage: shouldAnimate
-          ? 'linear-gradient(to right, transparent 0%, black 4%, black 96%, transparent 100%)'
-          : 'none',
-        WebkitMaskImage: shouldAnimate
-          ? 'linear-gradient(to right, transparent 0%, black 4%, black 96%, transparent 100%)'
-          : 'none',
       }}
     >
       {/* Invisible measurement probe without trailing padding to ensure 100% exact overflow detection */}
